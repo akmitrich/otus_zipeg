@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <string.h>
 #include "slice.h"
 
 static int run(const char *);
@@ -19,48 +20,65 @@ int main(int argc, char *argv[])
 }
 
 #define MAX_BUF_SIZE 4096
+#define JPEG_MARKER_LEN 2
 
-int process_file(FILE *input)
+int find_jpeg_end(FILE *input)
 {
     int n;
-    unsigned char *jpeg_marker;
     uint16_t *int_marker;
     unsigned char buffer[MAX_BUF_SIZE];
     struct Slice chunk;
+    struct Slice jpeg_marker;
+    size_t end_jpeg_pos;
     int len = 0;
-    jpeg_marker = buffer;
 
-    n = fread(buffer, 1, 2, input);
-    if (n != 2)
+    n = fread(buffer, 1, JPEG_MARKER_LEN, input);
+    if (n != JPEG_MARKER_LEN)
     {
-        printf("ERROR: unable to read first two bytes from FILE\n");
-        return 77;
+        printf("ERROR: unable to read first bytes from FILE\n");
+        return -1;
     }
-    int_marker = (uint16_t *)jpeg_marker;
+    int_marker = (uint16_t *)buffer;
     if (*int_marker != 0xd8ff)
     {
         printf("ERROR: FILE is not a JPEG. %x\n", *int_marker);
-        return 1;
+        return -1;
     }
+
+    buffer[0] = 0;
+    end_jpeg_pos = n;
+    jpeg_marker = (struct Slice){.data = NULL, .len = 2};
     while (*int_marker != 0xd9ff)
     {
-        if (jpeg_marker - buffer > len - 2)
+        ++end_jpeg_pos;
+        if (slice_is_none(jpeg_marker))
         {
-            buffer[0] = jpeg_marker[0];
-            len = fread(buffer + 1, 1, MAX_BUF_SIZE, input);
+            len = fread(buffer + 1, 1, MAX_BUF_SIZE - 1, input);
             if (len == 0)
             {
-                printf("ERROR: end of JPEG not found\n");
-                return 2;
+                printf("ERROR: unexpected end of JPEG.\n");
+                return -2;
             }
-            chunk = slice_from(buffer, len);
-            slice_debug(&chunk);
-            printf("Had read %d bytes", len);
-            return 88;
+            chunk = slice_from(buffer, len + 1);
+            jpeg_marker = slice_window_new(chunk, JPEG_MARKER_LEN);
         }
+        int_marker = (uint16_t *)jpeg_marker.data;
+        struct Slice new_marker = slice_window_shift(jpeg_marker, chunk, 1);
+        if (slice_is_none(new_marker))
+        {
+            unsigned char *last_marker = jpeg_marker.data;
+            buffer[0] = last_marker[JPEG_MARKER_LEN - 1];
+        }
+        jpeg_marker = new_marker;
     }
-    printf("FILE is a JPEG");
+    printf("JPEG ends at %ld\n", end_jpeg_pos);
 
+    return end_jpeg_pos;
+}
+
+int check_zip(FILE *input)
+{
+    printf("%d", input->_mode);
     return 0;
 }
 
@@ -75,8 +93,17 @@ int run(const char *filename)
         return 1;
     }
 
-    int n = process_file(input);
-    printf("Finish to process %s\n", filename);
+    int n = find_jpeg_end(input);
+    if (n > 0)
+    {
+        fseek(input, n, SEEK_SET);
+        n = check_zip(input);
+        printf("Finish to process %s\n", filename);
+    }
+    else
+    {
+        printf("Unsuccessful.\n");
+    }
 
     fclose(input);
     return n;
