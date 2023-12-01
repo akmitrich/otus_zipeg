@@ -1,5 +1,0 @@
-CC = gcc
-CFLAGS = -Wall -Wextra -Wpedantic -std=c11
-
-zipeg: zipeg.c
-    $(CC) $(CFLAGS) -o zipeg zipeg.c
